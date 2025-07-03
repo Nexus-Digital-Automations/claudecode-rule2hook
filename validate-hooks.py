@@ -99,6 +99,59 @@ def validate_hooks_file(file_path):
     return True
 
 
+def detect_merge_conflicts(existing_path, new_path):
+    """
+    Simulates a merge and detects potential conflicts.
+    Returns True if safe to merge, False if conflicts are found.
+    """
+    if not existing_path.exists():
+        print("✅ No existing hooks file - safe to create new hooks")
+        return True
+
+    try:
+        with open(existing_path, 'r') as f:
+            existing_config = json.load(f)
+        with open(new_path, 'r') as f:
+            new_config = json.load(f)
+    except json.JSONDecodeError as e:
+        print(f"❌ JSON parsing error: {e}")
+        return False
+
+    existing_hooks = existing_config.get("hooks", {})
+    new_hooks = new_config.get("hooks", {})
+    
+    has_conflicts = False
+
+    # Build a mapping of existing event/matcher combinations
+    existing_matchers = {}
+    for event, hooks_list in existing_hooks.items():
+        existing_matchers[event] = {}
+        for hook_group in hooks_list:
+            matcher = hook_group.get("matcher", "")
+            if matcher:
+                # Store the first command found for this event/matcher pair
+                first_command = hook_group.get("hooks", [{}])[0].get("command", "")
+                existing_matchers[event][matcher] = first_command
+
+    # Check if any new hook conflicts with existing ones
+    for event, new_hooks_list in new_hooks.items():
+        if event in existing_matchers:
+            for new_hook_group in new_hooks_list:
+                new_matcher = new_hook_group.get("matcher", "")
+                if new_matcher and new_matcher in existing_matchers[event]:
+                    # CONFLICT! Same event and matcher already defined
+                    has_conflicts = True
+                    existing_command = existing_matchers[event][new_matcher]
+                    new_command = new_hook_group.get("hooks", [{}])[0].get("command", "")
+                    
+                    print(f"\n🚨 CONFLICT DETECTED in event '{event}' for matcher '{new_matcher}':")
+                    print(f"  - Existing command: \"{existing_command}\"")
+                    print(f"  - New conflicting command: \"{new_command}\"")
+                    print("  - Aborting merge to prevent overwriting the existing hook.")
+
+    return not has_conflicts
+
+
 def display_hooks_summary(file_path):
     """Display hooks summary"""
     with open(file_path, 'r') as f:
@@ -117,15 +170,32 @@ def display_hooks_summary(file_path):
 
 
 if __name__ == "__main__":
-    # Default to check user's hooks.json
-    hooks_file = Path.home() / ".claude" / "hooks.json"
-    
-    # Can also specify other files
-    if len(sys.argv) > 1:
+    if len(sys.argv) == 3:
+        # Mode: Pre-merge conflict detection
+        existing_hooks_file = Path(sys.argv[1])
+        new_hook_fragment_file = Path(sys.argv[2])
+        
+        print(f"🔬 Performing pre-merge validation...")
+        print(f"  - Existing Hooks: {existing_hooks_file}")
+        print(f"  - New Hooks: {new_hook_fragment_file}")
+        
+        if not detect_merge_conflicts(existing_hooks_file, new_hook_fragment_file):
+            print("\n❌ Merge conflict detected. Aborting.")
+            sys.exit(1)
+        else:
+            print("\n✅ No merge conflicts found. Safe to merge.")
+            
+    elif len(sys.argv) == 2:
+        # Mode: Standard validation of a single file
         hooks_file = Path(sys.argv[1])
-    
-    if validate_hooks_file(hooks_file):
-        display_hooks_summary(hooks_file)
+        if validate_hooks_file(hooks_file):
+            display_hooks_summary(hooks_file)
+        else:
+            print("\n❌ Validation failed")
+            sys.exit(1)
+            
     else:
-        print("\n❌ Validation failed")
+        print("Usage:")
+        print("  - To validate a file: python3 validate-hooks.py <path_to_hooks.json>")
+        print("  - To check for merge conflicts: python3 validate-hooks.py <existing_hooks.json> <new_hook_fragment.json>")
         sys.exit(1)
